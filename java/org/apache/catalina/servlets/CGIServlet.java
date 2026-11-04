@@ -43,12 +43,16 @@ import javax.servlet.RequestDispatcher;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
+import javax.servlet.UnavailableException;
 import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
+import org.apache.catalina.Globals;
+import org.apache.catalina.WebResource;
+import org.apache.catalina.WebResourceRoot;
 import org.apache.catalina.util.IOTools;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
@@ -286,6 +290,8 @@ public final class CGIServlet extends HttpServlet {
     private Set<String> cgiMethods = new HashSet<>();
     private boolean cgiMethodsAll = false;
 
+    private transient WebResourceRoot resources = null;
+
 
     /**
      * The time (in milliseconds) to wait for the reading of stderr to complete
@@ -438,6 +444,13 @@ public final class CGIServlet extends HttpServlet {
             cmdLineArgumentsDecodedPattern = null;
         } else if (value != null) {
             cmdLineArgumentsDecodedPattern = Pattern.compile(value);
+        }
+
+        // Load the web resources
+        resources = (WebResourceRoot) getServletContext().getAttribute(Globals.RESOURCES_ATTR);
+
+        if (resources == null) {
+            throw new UnavailableException(sm.getString("cgiServlet.noResources"));
         }
     }
 
@@ -692,9 +705,6 @@ public final class CGIServlet extends HttpServlet {
         /** pathInfo for the current request */
         private String pathInfo = null;
 
-        /** real file system directory of the enclosing servlet's web app */
-        private String webAppRootDir = null;
-
         /** tempdir for context - used to expand scripts in unexpanded wars */
         private File tmpDir = null;
 
@@ -752,7 +762,6 @@ public final class CGIServlet extends HttpServlet {
          */
         protected void setupFromContext(ServletContext context) {
             this.context = context;
-            this.webAppRootDir = context.getRealPath("/");
             this.tmpDir = (File) context.getAttribute(ServletContext.TEMPDIR);
         }
 
@@ -844,6 +853,36 @@ public final class CGIServlet extends HttpServlet {
          * Resolves core information about the cgi script.
          *
          * <p>
+         * This method is retained for backwards compatibility only. The
+         * <code>webAppRootDir</code> argument is ignored because the script is
+         * now located using the web application's
+         * {@link org.apache.catalina.WebResourceRoot} rather than by walking
+         * the file system directly.
+         * </p>
+         *
+         * @param pathInfo       String from HttpServletRequest.getPathInfo()
+         * @param webAppRootDir  Ignored
+         * @param contextPath    String as from
+         *                       HttpServletRequest.getContextPath()
+         * @param servletPath    String as from
+         *                       HttpServletRequest.getServletPath()
+         * @param cgiPathPrefix  subdirectory of the web application below which
+         *                       the web app's CGIs may be stored; can be null.
+         *
+         * @return the same values as
+         *         {@link #findCGI(String, String, String, String)}
+         */
+        protected String[] findCGI(String pathInfo, String webAppRootDir,
+                                   String contextPath, String servletPath,
+                                   String cgiPathPrefix) {
+            return findCGI(contextPath, servletPath, pathInfo, cgiPathPrefix);
+        }
+
+
+        /**
+         * Resolves core information about the cgi script.
+         *
+         * <p>
          * Example URI:
          * </p>
          * <PRE> /servlet/cgigateway/dir1/realCGIscript/pathinfo1 </PRE>
@@ -854,15 +893,15 @@ public final class CGIServlet extends HttpServlet {
          * <LI><b>name</b> = realCGIscript
          * </ul>
          * <p>
-         * CGI search algorithm: search the real path below
+         * CGI search algorithm: search the web application resources below
          *    &lt;my-webapp-root&gt; and find the first non-directory in
          *    the getPathTranslated("/"), reading/searching from left-to-right.
          *</p>
          *<p>
          *   The CGI search path will start at
-         *   webAppRootDir + File.separator + cgiPathPrefix
-         *   (or webAppRootDir alone if cgiPathPrefix is
-         *   null).
+         *   the web application root plus cgiPathPrefix
+         *   (or the servlet path if cgiPathPrefix is
+         *   null or empty).
          *</p>
          *<p>
          *   cgiPathPrefix is defined by setting
@@ -870,18 +909,14 @@ public final class CGIServlet extends HttpServlet {
          *
          *</p>
          *
-         * @param pathInfo       String from HttpServletRequest.getPathInfo()
-         * @param webAppRootDir  String from context.getRealPath("/")
          * @param contextPath    String as from
          *                       HttpServletRequest.getContextPath()
          * @param servletPath    String as from
          *                       HttpServletRequest.getServletPath()
-         * @param cgiPathPrefix  subdirectory of webAppRootDir below which
+         * @param pathInfo       String from HttpServletRequest.getPathInfo()
+         * @param cgiPathPrefix  subdirectory of the web application below which
          *                       the web app's CGIs may be stored; can be null.
-         *                       The CGI search path will start at
-         *                       webAppRootDir + File.separator + cgiPathPrefix
-         *                       (or webAppRootDir alone if cgiPathPrefix is
-         *                       null).  cgiPathPrefix is defined by setting
+         *                       cgiPathPrefix is defined by setting
          *                       the servlet's cgiPathPrefix init parameter.
          *
          *
@@ -903,61 +938,105 @@ public final class CGIServlet extends HttpServlet {
          *                        cgi script, or null if no cgi was found
          * </ul>
          */
-        protected String[] findCGI(String pathInfo, String webAppRootDir,
-                                   String contextPath, String servletPath,
-                                   String cgiPathPrefix) {
-            String path = null;
-            String name = null;
-            String scriptname = null;
+        protected String[] findCGI(String contextPath, String servletPath,
+                                   String pathInfo, String cgiPathPrefix) {
 
-            if (webAppRootDir != null &&
-                    webAppRootDir.lastIndexOf(File.separator) == (webAppRootDir.length() - 1)) {
-                //strip the trailing "/" from the webAppRootDir
-                webAppRootDir = webAppRootDir.substring(0, (webAppRootDir.length() - 1));
-            }
+            StringBuilder cgiPath = new StringBuilder();
+            StringBuilder urlPath = new StringBuilder();
 
-            if (cgiPathPrefix != null) {
-                webAppRootDir = webAppRootDir + File.separator + cgiPathPrefix;
-            }
+            WebResource cgiScript = null;
 
-            if (log.isDebugEnabled()) {
-                log.debug(sm.getString("cgiServlet.find.path", pathInfo, webAppRootDir));
+            if (cgiPathPrefix == null || cgiPathPrefix.isEmpty()) {
+                cgiPath.append(servletPath);
+            } else {
+                cgiPath.append('/');
+                cgiPath.append(cgiPathPrefix);
             }
+            urlPath.append(servletPath);
 
-            File currentLocation = new File(webAppRootDir);
-            StringTokenizer dirWalker = new StringTokenizer(pathInfo, "/");
-            if (log.isDebugEnabled()) {
-                log.debug(sm.getString("cgiServlet.find.location",
-                        currentLocation.getAbsolutePath()));
-            }
-            StringBuilder cginameBuilder = new StringBuilder();
-            while (!currentLocation.isFile() && dirWalker.hasMoreElements()) {
-                String nextElement = (String) dirWalker.nextElement();
-                currentLocation = new File(currentLocation, nextElement);
-                cginameBuilder.append('/').append(nextElement);
+            StringTokenizer pathWalker = new StringTokenizer(pathInfo, "/");
+
+            while (pathWalker.hasMoreElements() && (cgiScript == null || !cgiScript.isFile())) {
+                String urlSegment = pathWalker.nextToken();
+                cgiPath.append('/');
+                cgiPath.append(urlSegment);
+                urlPath.append('/');
+                urlPath.append(urlSegment);
                 if (log.isDebugEnabled()) {
-                    log.debug(sm.getString("cgiServlet.find.location",
-                            currentLocation.getAbsolutePath()));
+                    log.debug(sm.getString("cgiServlet.find.location", cgiPath.toString()));
                 }
+                cgiScript = resources.getResource(cgiPath.toString());
             }
-            String cginame = cginameBuilder.toString();
-            if (!currentLocation.isFile()) {
+
+            // No script was found
+            if (cgiScript == null || !cgiScript.isFile()) {
                 return new String[] { null, null, null, null };
             }
 
-            path = currentLocation.getAbsolutePath();
-            name = currentLocation.getName();
+            // Set-up return values
+            String path = null;
+            String scriptName = null;
+            String cgiName = null;
+            String name = null;
 
-            if (servletPath.startsWith(cginame)) {
-                scriptname = contextPath + cginame;
-            } else {
-                scriptname = contextPath + servletPath + cginame;
+            path = cgiScript.getCanonicalPath();
+            if (path == null) {
+                /*
+                 * The script doesn't exist directly on the file system. It
+                 * might be located in an archive or similar. Such scripts are
+                 * extracted to the web application's temporary file location.
+                 */
+                File tmpCgiFile = new File(tmpDir + cgiPath.toString());
+                if (!tmpCgiFile.exists()) {
+
+                    // Create directories
+                    File parent = tmpCgiFile.getParentFile();
+                    if (!parent.mkdirs() && !parent.isDirectory()) {
+                        log.warn(sm.getString("cgiServlet.expandCreateDirFail",
+                                parent.getAbsolutePath()));
+                        return new String[] { null, null, null, null };
+                    }
+
+                    try (InputStream is = cgiScript.getInputStream()) {
+                        synchronized (expandFileLock) {
+                            // Check if file was created by concurrent request
+                            if (!tmpCgiFile.exists()) {
+                                try {
+                                    Files.copy(is, tmpCgiFile.toPath());
+                                } catch (IOException ioe) {
+                                    log.warn(sm.getString("cgiServlet.expandFail",
+                                            cgiScript.getURL(), tmpCgiFile.getAbsolutePath()), ioe);
+                                    if (tmpCgiFile.exists()) {
+                                        if (!tmpCgiFile.delete()) {
+                                            log.warn(sm.getString("cgiServlet.expandDeleteFail",
+                                                    tmpCgiFile.getAbsolutePath()));
+                                        }
+                                    }
+                                    return new String[] { null, null, null, null };
+                                }
+                                if (log.isDebugEnabled()) {
+                                    log.debug(sm.getString("cgiServlet.expandOk",
+                                            cgiScript.getURL(), tmpCgiFile.getAbsolutePath()));
+                                }
+                            }
+                        }
+                    } catch (IOException ioe) {
+                        log.warn(sm.getString("cgiServlet.expandCloseFail",
+                                cgiScript.getURL()), ioe);
+                    }
+                }
+                path = tmpCgiFile.getAbsolutePath();
             }
+
+            scriptName = urlPath.toString();
+            cgiName = scriptName.substring(servletPath.length());
+            name = scriptName.substring(scriptName.lastIndexOf('/') + 1);
 
             if (log.isDebugEnabled()) {
-                log.debug(sm.getString("cgiServlet.find.found", name, path, scriptname, cginame));
+                log.debug(sm.getString("cgiServlet.find.found", name, path, scriptName, cgiName));
             }
-            return new String[] { path, scriptname, cginame, name };
+
+            return new String[] { path, scriptName, cgiName, name };
         }
 
         /**
@@ -998,16 +1077,9 @@ public final class CGIServlet extends HttpServlet {
             sPathInfoOrig = this.pathInfo;
             sPathInfoOrig = sPathInfoOrig == null ? "" : sPathInfoOrig;
 
-            if (webAppRootDir == null ) {
-                // The app has not been deployed in exploded form
-                webAppRootDir = tmpDir.toString();
-                expandCGIScript();
-            }
-
-            sCGINames = findCGI(sPathInfoOrig,
-                                webAppRootDir,
-                                contextPath,
+            sCGINames = findCGI(contextPath,
                                 servletPath,
+                                sPathInfoOrig,
                                 cgiPathPrefix);
 
             sCGIFullPath = sCGINames[0];
