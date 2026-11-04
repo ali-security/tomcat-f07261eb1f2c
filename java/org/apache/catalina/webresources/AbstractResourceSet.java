@@ -74,8 +74,8 @@ public abstract class AbstractResourceSet extends LifecycleBase
     public final void setWebAppMount(String webAppMount) {
         checkPath(webAppMount);
         // Optimise internal processing
-        if (webAppMount.equals("/")) {
-            this.webAppMount = "";
+        if (webAppMount.endsWith("/")) {
+            this.webAppMount = webAppMount.substring(0, webAppMount.length() - 1);
         } else {
             this.webAppMount = webAppMount;
         }
@@ -84,6 +84,18 @@ public abstract class AbstractResourceSet extends LifecycleBase
     protected final String getWebAppMount() {
         return webAppMount;
     }
+
+    protected boolean isPathMounted(String path, String webAppMount) {
+        // Doesn't call getWebAppMount() as value might have changed
+        if (path.startsWith(webAppMount)) {
+            if (path.length() != webAppMount.length() && path.charAt(webAppMount.length()) != '/') {
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
 
     public final void setBase(String base) {
         this.base = base;

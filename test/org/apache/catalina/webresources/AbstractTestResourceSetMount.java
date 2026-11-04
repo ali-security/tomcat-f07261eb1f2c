@@ -17,6 +17,7 @@
 package org.apache.catalina.webresources;
 
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.util.Set;
 
@@ -66,6 +67,54 @@ public abstract class AbstractTestResourceSetMount
     public void testWriteAbove() {
         InputStream is = new ByteArrayInputStream("test".getBytes());
         Assert.assertFalse(resourceRoot.write("/", is, false));
+    }
+
+    @Test
+    public final void testListWithoutLeadingFileSeparator() {
+        // Path shares the mount as a prefix but is not below the mount
+        String[] results = resourceRoot.list(getMount() + "d1");
+
+        Assert.assertNotNull(results);
+        Assert.assertEquals(0, results.length);
+    }
+
+    @Test
+    public final void testListWebAppPathsWithoutLeadingFileSeparator() {
+        // Path shares the mount as a prefix but is not below the mount
+        Set<String> results = resourceRoot.listWebAppPaths(getMount() + "d1");
+
+        Assert.assertNull(results);
+    }
+
+    @Test
+    public final void testMkdirWithoutLeadingFileSeparator() {
+        // Path shares the mount as a prefix but is not below the mount
+        String newDirName = getNewDirName();
+        File file = new File(getBaseDir(), newDirName);
+        try {
+            Assert.assertFalse(resourceRoot.mkdir(getMount() + newDirName));
+            Assert.assertFalse(file.exists());
+        } finally {
+            if (file.exists()) {
+                Assert.assertTrue(file.delete());
+            }
+        }
+    }
+
+    @Test
+    public final void testWriteWithoutLeadingFileSeparator() {
+        // Path shares the mount as a prefix but is not below the mount
+        String newFileName = getNewFileName();
+        File file = new File(getBaseDir(), newFileName);
+        InputStream is = new ByteArrayInputStream("test".getBytes());
+        try {
+            Assert.assertFalse(resourceRoot.write(getMount() + newFileName, is, false));
+            Assert.assertFalse(file.exists());
+        } finally {
+            if (file.exists()) {
+                Assert.assertTrue(file.delete());
+            }
+        }
     }
 
     @Override

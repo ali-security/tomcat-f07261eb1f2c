@@ -68,7 +68,7 @@ public abstract class AbstractArchiveResourceSet extends AbstractResourceSet {
         String webAppMount = getWebAppMount();
 
         ArrayList<String> result = new ArrayList<>();
-        if (path.startsWith(webAppMount)) {
+        if (isPathMounted(path, webAppMount)) {
             String pathInJar =
                     getInternalPath() + path.substring(webAppMount.length());
             // Always strip off the leading '/' to get the JAR path
@@ -118,7 +118,7 @@ public abstract class AbstractArchiveResourceSet extends AbstractResourceSet {
         String webAppMount = getWebAppMount();
 
         ResourceSet<String> result = new ResourceSet<>();
-        if (path.startsWith(webAppMount)) {
+        if (isPathMounted(path, webAppMount)) {
             String pathInJar =
                     getInternalPath() + path.substring(webAppMount.length());
             // Always strip off the leading '/' to get the JAR path and make
@@ -229,7 +229,7 @@ public abstract class AbstractArchiveResourceSet extends AbstractResourceSet {
         // If the JAR has been mounted below the web application root, return
         // an empty resource for requests outside of the mount point.
 
-        if (path.startsWith(webAppMount)) {
+        if (isPathMounted(path, webAppMount)) {
             String pathInJar = getInternalPath() + path.substring(
                     webAppMount.length(), path.length());
             // Always strip off the leading '/' to get the JAR path
