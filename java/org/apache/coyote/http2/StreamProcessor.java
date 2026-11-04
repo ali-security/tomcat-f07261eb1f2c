@@ -440,7 +440,10 @@ class StreamProcessor extends AbstractProcessor {
             StreamException se = new StreamException(
                     sm.getString("streamProcessor.cancel", stream.getConnectionId(),
                             stream.getIdentifier()), Http2Error.CANCEL, stream.getIdAsInt());
-            handler.sendStreamReset(se);
+            // Close (reset) the stream rather than just sending the reset frame
+            // so the stream state is updated and the stream is removed from
+            // the count of active streams.
+            stream.close(se);
         }
     }
 }
